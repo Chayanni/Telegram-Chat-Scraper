@@ -17,9 +17,9 @@ import urllib3
 
 # ----------------- CONFIG ----------------- #
 
-GET_CHANNELS = True # Se True, ele vai extrair os canais, se não, sete como: False
+GET_CHANNELS = False # Se True, ele vai extrair os canais, se não, sete como: False
 GET_GROUPS = True # Se True, ele vai extrair os grupos, se não, sete como: False
-MIN_MEMBERS_OR_SUBSCRIBERS = 1000 # Se o grupo ou canal tiver menos que esse número, ele não vai extrair
+MIN_MEMBERS_OR_SUBSCRIBERS = 2000 # Se o grupo ou canal tiver menos que esse número, ele não vai extrair
 PAGE_LIMIT = None # Número limite de páginas por site em que ele vai extrair os links, se não quiser por limite, sete como: None
 CSV_FILE_NAME = 'chats.csv' # Nome do arquivo CSV em que os dados serão salvos
 
@@ -124,54 +124,57 @@ def get_tg_chat_url_from_page(session: Session, chat_post_url: str) -> str:
 
 
 def get_chat_info(session: Session, tg_chat_url: str) -> tuple:
-    response = session.get(tg_chat_url, headers=HEADERS, verify=False, allow_redirects=True)
-    refused_by = 'Ser um chat inválido ou inacessível'
+    if tg_chat_url.startswith('https://t.me/'):
+        response = session.get(tg_chat_url, headers=HEADERS, verify=False, allow_redirects=True)
+        refused_by = 'Ser um chat inválido ou inacessível'
 
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.text, 'html.parser')
-        join_chat = soup.find('a', class_='tgme_action_button_new')
-        join_chat_text = ''
-        chat_type = 'N/A'
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            join_chat = soup.find('a', class_='tgme_action_button_new')
+            join_chat_text = ''
+            chat_type = 'N/A'
 
-        if join_chat:
-            join_chat_text = join_chat.text.strip()
+            if join_chat:
+                join_chat_text = join_chat.text.strip()
 
-        if 'channel' in response.text:
-            chat_type = 'channel'
+            if 'channel' in response.text:
+                chat_type = 'channel'
 
-        if join_chat_text == 'View in Telegram' or join_chat_text.lower() == 'join chat' or join_chat_text.lower() == 'join group':
-            chat_type = 'group'
+            elif join_chat_text == 'View in Telegram' or join_chat_text.lower() == 'join chat' or join_chat_text.lower() == 'join group':
+                chat_type = 'group'
 
-        name = soup.find('meta', property='og:title')["content"]
-        desc = soup.find('meta', property='og:description')["content"]
-        if 'you can' in str(desc).lower():
-            desc = 'N/A'
+            name = soup.find('meta', property='og:title')["content"]
+            desc = soup.find('meta', property='og:description')["content"]
+            if 'you can' in str(desc).lower():
+                desc = 'N/A'
 
-        if chat_type == 'channel' and not GET_CHANNELS:
-            refused_by = 'Ser um canal'
-        elif chat_type == 'group' and not GET_GROUPS:
-            refused_by = 'Ser um grupo'
-        else:
-            members = 'N/A'
-            members = soup.find('div', class_='tgme_page_extra')
-            if members:
-                members = members.text.strip()
-                if 'members' in members:
-                    members = members.split('members')[0].strip().replace(' ', '')
-                    if 'K' in members:
-                        members = int(float(members.replace('K', '')) * 1000)
+            if chat_type == 'channel' and not GET_CHANNELS:
+                refused_by = 'Ser um canal'
+            elif chat_type == 'group' and not GET_GROUPS:
+                refused_by = 'Ser um grupo'
+            else:
+                members = 'N/A'
+                members = soup.find('div', class_='tgme_page_extra')
+                if members:
+                    members = members.text.strip()
+                    if 'members' in members:
+                        members = members.split('members')[0].strip().replace(' ', '')
+                        if 'K' in members:
+                            members = int(float(members.replace('K', '')) * 1000)
 
-                elif 'subscriber' in members:
-                    members = members.split('subscriber')[0].strip().replace(' ', '')
-                    if 'K' in members:
-                        members = int(float(members.replace('K', '')) * 1000)
+                    elif 'subscriber' in members:
+                        members = members.split('subscriber')[0].strip().replace(' ', '')
+                        if 'K' in members:
+                            members = int(float(members.replace('K', '')) * 1000)
 
-                if not str(members).isdigit():
-                    refused_by = 'Não ser um grupo ou canal válido'
-                elif int(members) < MIN_MEMBERS_OR_SUBSCRIBERS:
-                    refused_by = f'Ter um número de membros ou inscritos menor que {MIN_MEMBERS_OR_SUBSCRIBERS}'
-                else:
-                    return True, unidecode(str(name)).strip(), unidecode(str(desc).strip()), str(members).strip(), str(chat_type).strip()
+                    if not str(members).isdigit():
+                        refused_by = 'Não ser um grupo ou canal válido'
+                    elif int(members) < MIN_MEMBERS_OR_SUBSCRIBERS:
+                        refused_by = f'Ter um número de membros ou inscritos menor que {MIN_MEMBERS_OR_SUBSCRIBERS}'
+                    else:
+                        return True, unidecode(str(name)).strip(), unidecode(str(desc).strip()), str(members).strip(), str(chat_type).strip()
+    else:
+        refused_by = 'Ser um link inválido'
 
     return False, refused_by, '', '', ''
 
@@ -190,6 +193,7 @@ def is_valid_host(session: Session, host: str) -> bool:
 def telegram_chat_scraper(host: str) -> None:
     tg_chats = []
     chat_urls = []
+    scraped_urls = []
     chat_names = []
     page = 1
 
@@ -200,7 +204,6 @@ def telegram_chat_scraper(host: str) -> None:
     
     if host[-1] != '/':
         host += '/'
-
 
     with Session() as session:
         while True:
@@ -222,29 +225,31 @@ def telegram_chat_scraper(host: str) -> None:
 
             for chat_url in chat_urls:
                 if not chat_url in tg_chats:
-                    if not 't.me' in chat_url:
-                        tg_url = get_tg_chat_url_from_page(session, chat_url)
-                    else:
-                        tg_url = chat_url
-
-                    if tg_url and 't.me' in tg_url:
-                        if tg_url in tg_chats or chat_url in chat_names:
-                            print(f'[red]Chat inválido[/red]: {tg_url} - Recusado por: Possívelmente já estar na lista')
-                            continue
+                    if not chat_url in scraped_urls:
+                        scraped_urls.append(chat_url)
+                        if not 't.me' in chat_url:
+                            tg_url = get_tg_chat_url_from_page(session, chat_url)
                         else:
-                            checked_chats += 1
+                            tg_url = chat_url
 
-                        tg_chats.append(tg_url)
-                        chat_names.append(chat_url)
-                        check = get_chat_info(session, tg_url)
-                        
-                        if check[0]:
-                            print(f'[green]Chat válido[/green]: {tg_url} - Nome: {check[1]} - Usuários: {check[3]}')
-                            insert_into_csv(CSV_FILE_NAME, [check[1], check[4], tg_url, check[3], check[2], host, datetime.now()])
-                            checked_chats += 1
+                        if tg_url and 't.me' in tg_url:
+                            if tg_url in tg_chats or chat_url in chat_names:
+                                print(f'[red]Chat inválido[/red]: {tg_url} - Recusado por: Possívelmente já estar na lista')
+                                continue
+                            else:
+                                checked_chats += 1
 
-                        else:
-                            print(f'[red]Chat inválido[/red]: {tg_url} - Recusado por: {check[1]}')
+                            tg_chats.append(tg_url)
+                            chat_names.append(chat_url)
+                            check = get_chat_info(session, tg_url)
+                            
+                            if check[0]:
+                                print(f'[green]Chat válido[/green]: {tg_url} - Nome: {check[1]} - Usuários: {check[3]}')
+                                insert_into_csv(CSV_FILE_NAME, [check[1], check[4], tg_url, check[3], check[2], host, datetime.now()])
+                                checked_chats += 1
+
+                            else:
+                                print(f'[red]Chat inválido[/red]: {tg_url} - Recusado por: {check[1]}')
                 
             if checked_chats == 0:
                 print(f'[red]Possívelmente é o final das páginas[/red]\n')
